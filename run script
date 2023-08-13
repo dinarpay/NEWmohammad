@@ -1,0 +1,17 @@
+gcc -o dirscan dirscan.c -lcurl -lpthread
+
+./dirscan
+
+متطلبات التشغيل
+
+Install kali linux 
+sudo apt install libcurl4 libcurl4-openssl-dev
+git https://github.com/nirsarkar/dirscan/
+cd dirscan
+make lulzbuster
+sudo make install
+
+---
+gcc -g -o crawler crawler.c -lcurl -lpthread
+gdb ./crawler
+run
