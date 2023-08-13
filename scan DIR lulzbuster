@@ -1,0 +1,96 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+#define TARGETS_FILE "targets.txt"
+#define MAX_LINE_LENGTH 1024
+#define THREAD_COUNT 25
+
+void process_results(const char *temp_results_file) {
+    FILE *temp_file = fopen(temp_results_file, "r");
+    if (!temp_file) {
+        fprintf(stderr, "Failed to open temporary results file.\n");
+        return;
+    }
+
+    char line[MAX_LINE_LENGTH];
+    while (fgets(line, sizeof(line), temp_file)) {
+        int response_code;
+        char url[MAX_LINE_LENGTH];
+        if (sscanf(line, "[*] %d | %*s | %*s | %*s | %s", &response_code, url) == 2) {
+            char output_filename[MAX_LINE_LENGTH];
+            snprintf(output_filename, sizeof(output_filename), "%d.txt", response_code);
+
+            FILE *output_file = fopen(output_filename, "a");
+            if (output_file) {
+                fprintf(output_file, "%s\n", url);
+                fclose(output_file);
+            }
+        }
+    }
+
+    fclose(temp_file);
+    remove(temp_results_file);
+}
+
+void *scan_target(void *arg) {
+    char *target = (char *)arg;
+    int thread_num = pthread_self();
+
+    char temp_results_file[MAX_LINE_LENGTH];
+    snprintf(temp_results_file, sizeof(temp_results_file), "temp_results_%d.txt", thread_num);
+
+    char command[MAX_LINE_LENGTH];
+    snprintf(command, sizeof(command), "lulzbuster -s %s -w paths.txt -r -S -t 25 -T 60 >> %s 2>&1", target, temp_results_file);
+    system(command);
+
+    FILE *temp_file = fopen(temp_results_file, "r");
+    if (temp_file) {
+        char line[MAX_LINE_LENGTH];
+        int game_over_found = 0;
+        while (fgets(line, sizeof(line), temp_file)) {
+            if (strstr(line, "[+] game over")) {
+                game_over_found = 1;
+                break;
+            }
+        }
+        fclose(temp_file);
+
+        if (game_over_found) {
+            process_results(temp_results_file);
+        } else {
+            fprintf(stderr, "Game over not found for target: %s\n", target);
+        }
+    }
+
+    free(target);
+    return NULL;
+}
+
+int main() {
+    FILE *file = fopen(TARGETS_FILE, "r");
+    if (!file) {
+        fprintf(stderr, "Failed to open targets file.\n");
+        return 1;
+    }
+
+    char target[MAX_LINE_LENGTH];
+    pthread_t threads[THREAD_COUNT];
+
+    while (!feof(file)) {
+        for (int i = 0; i < THREAD_COUNT && fgets(target, sizeof(target), file); i++) {
+            target[strcspn(target, "\n")] = 0;
+            char *target_copy = strdup(target);
+            pthread_create(&threads[i], NULL, scan_target, target_copy);
+        }
+
+        for (int i = 0; i < THREAD_COUNT; i++) {
+            pthread_join(threads[i], NULL);
+        }
+    }
+
+    fclose(file);
+
+    return 0;
+}
