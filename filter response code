@@ -1,0 +1,87 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
+#include <unistd.h>
+
+int main() {
+    FILE *combined_file = fopen("combined_results.txt", "w");
+    if (combined_file == NULL) {
+        perror("Error opening combined_results.txt");
+        return 1;
+    }
+
+    // Merge all files with the pattern into a single file
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(".");
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strstr(dir->d_name, "temp_results_") != NULL) {
+                FILE *temp_file = fopen(dir->d_name, "r");
+                if (temp_file == NULL) {
+                    perror("Error opening temp file");
+                    continue;
+                }
+                char line[1024];
+                while (fgets(line, sizeof(line), temp_file)) {
+                    fputs(line, combined_file);
+                }
+                fclose(temp_file);
+                remove(dir->d_name); // Delete the temporary file
+            }
+        }
+        closedir(d);
+    }
+    fclose(combined_file);
+
+    // Process the combined file
+    combined_file = fopen("combined_results.txt", "r");
+    if (combined_file == NULL) {
+        perror("Error opening combined_results.txt");
+        return 1;
+    }
+
+    char line[1024];
+    while (fgets(line, sizeof(line), combined_file)) {
+        char *response_code_str = strstr(line, "[*] \033[0m");
+        if (response_code_str != NULL) {
+            response_code_str += 8; // Move to the start of the response code
+            char response_code[4];
+            strncpy(response_code, response_code_str, 3);
+            response_code[3] = '\0';
+
+            char *url = strrchr(line, ' ');
+            if (url != NULL) {
+                url++; // Move past the space to the start of the URL
+                char filename[8];
+                sprintf(filename, "%s.txt", response_code);
+                FILE *output_file = fopen(filename, "a");
+                if (output_file != NULL) {
+                    fprintf(output_file, "%s", url);
+                    fclose(output_file);
+                }
+            }
+        }
+    }
+    fclose(combined_file);
+
+    // Remove duplicate links
+    d = opendir(".");
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strstr(dir->d_name, ".txt") != NULL && strcmp(dir->d_name, "combined_results.txt") != 0) {
+char command[1024]; // Increase the buffer size
+snprintf(command, sizeof(command), "sort -u -o %s %s", dir->d_name, dir->d_name);
+system(command);
+            }
+        }
+        closedir(d);
+    }
+
+    // Remove the combined file
+    remove("combined_results.txt");
+
+    printf("Results processed and saved in text files based on response codes.\n");
+    return 0;
+}
