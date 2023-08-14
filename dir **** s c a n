@@ -8,11 +8,11 @@
 
 #define TARGETS_FILE "targets.txt"
 #define GUESS_FILE "guess_file.txt"
-#define CHUNK_SIZE 31
+#define CHUNK_SIZE 62
 #define MAX_LINE_LENGTH 1024
-#define THREAD_COUNT 150
-#define REQUEST_DELAY_MICROSECONDS 5000000 // 5 seconds
-#define MAX_FALSE_POSITIVES 3
+#define THREAD_COUNT 255
+#define REQUEST_DELAY_MICROSECONDS 3000000 // 5 seconds
+#define MAX_FALSE_POSITIVES 5
 
 struct ThreadData {
     char **targets;
@@ -26,6 +26,7 @@ long defaultResponse = 0;
 int falsePositivesCount = 0;
 
 size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp);
+size_t write_data(void *ptr, size_t size, size_t nmemb, void *stream);
 char **read_file(const char *filename, int *line_count);
 void perform_request(const char *url, const char *path);
 void *thread_function(void *data);
@@ -99,6 +100,11 @@ size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
     return total_size;
 }
 
+size_t write_data(void *ptr, size_t size, size_t nmemb, void *stream) {
+    size_t written = fwrite(ptr, size, nmemb, (FILE *)stream);
+    return written;
+}
+
 void perform_request(const char *url, const char *path) {
     // Check default response if not set
     if (defaultResponse == 0) {
@@ -107,7 +113,7 @@ void perform_request(const char *url, const char *path) {
 
     long status;
     size_t content_length;
-    int dir;
+    int dir = 0;
     if (getVerifiedResponse(url, path, &status, &content_length, &dir) != 0) {
         fprintf(stderr, "Failed to get verified response for URL: %s/%s\n", url, path);
         return;
@@ -136,7 +142,7 @@ void perform_request(const char *url, const char *path) {
             fprintf(stderr, "Failed to open dir.txt for writing\n");
         }
     }
-	
+
     // Save the response code and URL to a file named after the response code
     if (status == 200 || status == 204 || status == 300 || status == 301 || status == 302 || status == 307 || status == 401 || status == 403 || status == 405 || status == 500) {
         char filename[MAX_LINE_LENGTH];
@@ -190,23 +196,45 @@ int getVerifiedResponse(const char *url, const char *path, long *status, size_t 
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // Only fetch headers, not the body
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L); // Set timeout for the request
 
-    CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK) {
-        fprintf(stderr, "Request failed: %s\n", curl_easy_strerror(res));
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-        return -1;
+    // Check if the path is a directory
+    if (dir) {
+        FILE *bodyfile = tmpfile();
+        if (bodyfile) {
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, bodyfile);
+            CURLcode res = curl_easy_perform(curl);
+            if (res != CURLE_OK) {
+                fclose(bodyfile);
+                fprintf(stderr, "Request failed: %s\n", curl_easy_strerror(res));
+                curl_slist_free_all(headers);
+                curl_easy_cleanup(curl);
+                return -1;
+            }
+
+            rewind(bodyfile);
+            char buffer[MAX_LINE_LENGTH];
+            while (fgets(buffer, sizeof(buffer), bodyfile)) {
+                if (strstr(buffer, "Index of")) {
+                    *dir = 1;
+                    break;
+                }
+            }
+            fclose(bodyfile);
+        } else {
+            fprintf(stderr, "Failed to open temporary file\n");
+        }
+    } else {
+        CURLcode res = curl_easy_perform(curl);
+        if (res != CURLE_OK) {
+            fprintf(stderr, "Request failed: %s\n", curl_easy_strerror(res));
+            curl_slist_free_all(headers);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
     }
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
     curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, content_length);
-
-    // Check if the path is a directory
-    if (dir) {
-        char content_type[MAX_LINE_LENGTH];
-        curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &content_type);
-        *dir = (strstr(content_type, "text/html") != NULL);
-    }
 
     curl_slist_free_all(headers);
     usleep(REQUEST_DELAY_MICROSECONDS);
