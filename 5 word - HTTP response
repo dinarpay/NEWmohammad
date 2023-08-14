@@ -1,0 +1,166 @@
+run
+gcc -o my_program1 my_program1.c -lcurl -lpthread
+./my_program1
+
+=======================================================================
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <curl/curl.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#define TARGETS_FILE "targets.txt"
+#define GUESS_FILE "guess_file.txt"
+#define CHUNK_SIZE 5
+#define MAX_LINE_LENGTH 1024
+#define THREAD_COUNT 1000
+#define REQUEST_DELAY_MICROSECONDS 5000000 // 5 seconds
+
+struct ThreadData {
+    char **targets;
+    int target_count;
+    char **guesses;
+    int guess_count;
+    int thread_id;
+};
+
+size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp);
+char **read_file(const char *filename, int *line_count);
+void perform_request(const char *url, const char *path);
+void *thread_function(void *data);
+
+int main() {
+    int target_count, guess_count;
+    char **targets = read_file(TARGETS_FILE, &target_count);
+    char **guesses = read_file(GUESS_FILE, &guess_count);
+
+    pthread_t threads[THREAD_COUNT];
+    struct ThreadData thread_data[THREAD_COUNT];
+
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        thread_data[i].targets = targets;
+        thread_data[i].target_count = target_count;
+        thread_data[i].guesses = guesses;
+        thread_data[i].guess_count = guess_count;
+        thread_data[i].thread_id = i;
+
+        pthread_create(&threads[i], NULL, thread_function, &thread_data[i]);
+    }
+
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    for (int i = 0; i < target_count; i++) {
+        free(targets[i]);
+    }
+
+    for (int i = 0; i < guess_count; i++) {
+        free(guesses[i]);
+    }
+
+    free(targets);
+    free(guesses);
+
+    return 0;
+}
+
+char **read_file(const char *filename, int *line_count) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        fprintf(stderr, "Failed to open file: %s\n", filename);
+        exit(EXIT_FAILURE);
+    }
+
+    char **lines = NULL;
+    char line[MAX_LINE_LENGTH];
+    *line_count = 0;
+
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\n")] = 0;
+        lines = realloc(lines, (*line_count + 1) * sizeof(char *));
+        if (!lines) {
+            fprintf(stderr, "Memory allocation failed\n");
+            exit(EXIT_FAILURE);
+        }
+        lines[*line_count] = strdup(line);
+        (*line_count)++;
+    }
+
+    fclose(file);
+    return lines;
+}
+
+size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+    size_t total_size = size * nmemb;
+    fwrite(contents, size, nmemb, (FILE *)userp);
+    return total_size;
+}
+
+void perform_request(const char *url, const char *path) {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        fprintf(stderr, "Failed to initialize CURL\n");
+        return;
+    }
+
+    char full_url[MAX_LINE_LENGTH];
+    snprintf(full_url, sizeof(full_url), "%s/%s", url, path);
+
+    // Set a common User-Agent
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537");
+
+    curl_easy_setopt(curl, CURLOPT_URL, full_url);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L); // Verify the peer's SSL certificate
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L); // Verify the host's SSL certificate
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // Only fetch headers, not the body
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L); // Set timeout for the request
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        fprintf(stderr, "Request failed: %s\n", curl_easy_strerror(res));
+    } else {
+        long response_code;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+        printf("Response code: %ld, URL: %s\n", response_code, full_url);
+
+        // Save the response code and URL to a file named after the response code
+        if (response_code != 404) {
+            char filename[MAX_LINE_LENGTH];
+            snprintf(filename, sizeof(filename), "%ld.txt", response_code);
+
+            FILE *file = fopen(filename, "a");
+            if (file) {
+                fprintf(file, "%s\n", full_url);
+                fclose(file);
+            } else {
+                fprintf(stderr, "Failed to open file for writing: %s\n", filename);
+            }
+        }
+    }
+
+    curl_slist_free_all(headers); // Free the custom headers
+    usleep(REQUEST_DELAY_MICROSECONDS);
+    curl_easy_cleanup(curl);
+}
+
+void *thread_function(void *data) {
+    struct ThreadData *thread_data = (struct ThreadData *)data;
+    int targets_per_thread = thread_data->target_count / THREAD_COUNT;
+    int start_index = thread_data->thread_id * targets_per_thread;
+    int end_index = (thread_data->thread_id == THREAD_COUNT - 1) ? thread_data->target_count : start_index + targets_per_thread;
+
+    for (int i = start_index; i < end_index; i++) {
+        for (int j = 0; j < thread_data->guess_count; j += CHUNK_SIZE) {
+            for (int k = 0; k < CHUNK_SIZE && j + k < thread_data->guess_count; k++) {
+                perform_request(thread_data->targets[i], thread_data->guesses[j + k]);
+            }
+        }
+    }
+
+    pthread_exit(NULL);
+}
