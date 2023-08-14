@@ -202,6 +202,7 @@ int getVerifiedResponse(const char *url, const char *path, long *status, size_t 
         if (bodyfile) {
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, bodyfile);
+            curl_easy_setopt(curl, CURLOPT_NOBODY, 0L); // Fetch body
             CURLcode res = curl_easy_perform(curl);
             if (res != CURLE_OK) {
                 fclose(bodyfile);
@@ -214,7 +215,7 @@ int getVerifiedResponse(const char *url, const char *path, long *status, size_t 
             rewind(bodyfile);
             char buffer[MAX_LINE_LENGTH];
             while (fgets(buffer, sizeof(buffer), bodyfile)) {
-                if (strstr(buffer, "Index of")) {
+                if (strstr(buffer, "Index of /") || strstr(buffer, "Directory listing for /")) {
                     *dir = 1;
                     break;
                 }
