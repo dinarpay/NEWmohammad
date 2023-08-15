@@ -1,0 +1,92 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <curl/curl.h>
+
+#define MAX_TARGET_LENGTH 256
+#define THREAD_COUNT 1000
+
+typedef struct {
+  FILE *input_file;
+  FILE *output_file;
+  pthread_mutex_t *output_lock;
+} ThreadArgs;
+
+int check_prefix(const char *target, const char *prefix) {
+  CURL *curl;
+  CURLcode res;
+
+  char url[MAX_TARGET_LENGTH];
+  snprintf(url, sizeof(url), "%s://%s", prefix, target);
+
+  curl = curl_easy_init();
+  if(curl) {
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L); // ÊÌÇæÒ ÇáÊÍÞÞ ãä ÔåÇÏÉ SSL
+    res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+  }
+
+  return (res == CURLE_OK) ? 1 : 0;
+}
+
+void *process_targets(void *args) {
+  ThreadArgs *thread_args = (ThreadArgs *)args;
+  char target[MAX_TARGET_LENGTH];
+
+  while(fgets(target, sizeof(target), thread_args->input_file)) {
+    target[strcspn(target, "\n")] = 0; // Remove newline
+    if(check_prefix(target, "https")) {
+      pthread_mutex_lock(thread_args->output_lock);
+      fprintf(thread_args->output_file, "https://%s\n", target);
+      pthread_mutex_unlock(thread_args->output_lock);
+    } else if(check_prefix(target, "http")) {
+      pthread_mutex_lock(thread_args->output_lock);
+      fprintf(thread_args->output_file, "http://%s\n", target);
+      pthread_mutex_unlock(thread_args->output_lock);
+    }
+  }
+
+  return NULL;
+}
+
+int main(int argc, char *argv[]) {
+  if(argc != 3) {
+    fprintf(stderr, "Usage: %s <input_file> <output_file>\n", argv[0]);
+    return 1;
+  }
+
+  FILE *input_file = fopen(argv[1], "r");
+  FILE *output_file = fopen(argv[2], "w");
+  if(!input_file || !output_file) {
+    fprintf(stderr, "Error opening files.\n");
+    return 1;
+  }
+
+  pthread_t threads[THREAD_COUNT];
+  pthread_mutex_t output_lock;
+  pthread_mutex_init(&output_lock, NULL);
+  ThreadArgs thread_args = {input_file, output_file, &output_lock};
+
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+
+  for(int i = 0; i < THREAD_COUNT; i++) {
+    pthread_create(&threads[i], NULL, process_targets, &thread_args);
+  }
+
+  for(int i = 0; i < THREAD_COUNT; i++) {
+    pthread_join(threads[i], NULL);
+  }
+
+  curl_global_cleanup();
+
+  fclose(input_file);
+  fclose(output_file);
+  pthread_mutex_destroy(&output_lock);
+
+  printf("Check completed. Results saved to %s.\n", argv[2]);
+  return 0;
+}
