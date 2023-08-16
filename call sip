@@ -6,6 +6,30 @@ cd pjproject-2.x.x
 # تكوين وتجميع وتثبيت
 ./configure && make dep && make && sudo make install
 
+=========
+find /pjproject-2.13.1 -name libpjsua2.so
+
+find . -name libpjsua2.so
+
+
+./configure --enable-shared --with-pjua2
+make dep && make clean && make
+
+
+sudo make install
+
+
+sudo ldconfig
+
+sudo cp ./pjsip/lib/libpjsua2.so /usr/local/lib/
+
+
+gcc call.c -o call $(pkg-config --cflags --libs libpjproject) -luv -lpthread
+
+
+
+<targets_file> <prefixes_file> <phone_numbers_file>
+./call targets.txt callprefix phone.txt
 
 
 sudo apt-get install libuv1-dev
@@ -40,12 +64,14 @@ pjsua_transport_create(PJSIP_TRANSPORT_TLS, &tcfg, &tid);
 #include <pthread.h>
 #include <uv.h>
 
+#define THIS_THREAD_IS_NOT_A_PJ_THREAD (!pj_thread_is_registered())
+
 typedef struct {
     char ip[100];
     int port;
     char user[50];
     char pass[50];
-    char protocol[5];  // udp, tcp, or tls
+    char protocol[5];
 } Target;
 
 typedef struct {
@@ -61,6 +87,10 @@ char phoneNumbers[1000][20];
 int num_targets = 0;
 int num_prefixes = 0;
 int num_phoneNumbers = 0;
+
+// These are needed to make sure our threads are registered with PJSIP
+pj_thread_desc desc;
+pj_thread_t *thread = 0;
 
 void readTargets(const char* filename) {
     FILE* file = fopen(filename, "r");
@@ -99,12 +129,8 @@ void timer_callback(uv_timer_t* timer) {
 }
 
 pjsua_acc_id makeCall(Target target, const char* prefix, const char* phoneNumber) {
-    char sip_uri[200];
-    if(strlen(target.user) > 0 && strlen(target.pass) > 0) {
-        sprintf(sip_uri, "sip:%s:%s@%s:%d;transport=%s/%s%s", target.user, target.pass, target.ip, target.port, target.protocol, prefix, phoneNumber);
-    } else {
-        sprintf(sip_uri, "sip:%s:%d;transport=%s/%s%s", target.ip, target.port, target.protocol, prefix, phoneNumber);
-    }
+    char sip_uri[300];
+    snprintf(sip_uri, sizeof(sip_uri), "sip:%s:%s@%s:%d;transport=%s/%s%s", target.user, target.pass, target.ip, target.port, target.protocol, prefix, phoneNumber);
 
     pjsua_call_id call_id;
     pj_str_t uri = pj_str(sip_uri);
@@ -117,10 +143,9 @@ void on_call_state(pjsua_call_id call_id, pjsip_event *e) {
     pjsua_call_info ci;
     pjsua_call_get_info(call_id, &ci);
     char response[50];
-    sprintf(response, "%d %.*s", ci.last_status, (int)ci.last_status_text.slen, ci.last_status_text.ptr);
+    snprintf(response, sizeof(response), "%d %.*s", ci.last_status, (int)ci.last_status_text.slen, ci.last_status_text.ptr);
     FILE *file = fopen(response, "a");
     if (file) {
-        // هنا يمكنك كتابة المزيد من المعلومات إذا كنت تحتفظ بها
         fprintf(file, "%s\n", response);
         fclose(file);
     }
@@ -128,12 +153,16 @@ void on_call_state(pjsua_call_id call_id, pjsip_event *e) {
 }
 
 void *thread_func(void *arg) {
+    if (THIS_THREAD_IS_NOT_A_PJ_THREAD) {
+        pj_thread_register(NULL, desc, &thread);
+    }
+
     CallData* call_data = (CallData*) malloc(sizeof(CallData));
     call_data->target = *(Target *)arg;
     for (int i = 0; i < num_prefixes; i++) {
         for (int j = 0; j < num_phoneNumbers; j++) {
-            call_data->prefix = prefixes[i];
-            call_data->phoneNumber = phoneNumbers[j];
+            strcpy(call_data->prefix, prefixes[i]);
+            strcpy(call_data->phoneNumber, phoneNumbers[j]);
             uv_timer_init(uv_default_loop(), &call_data->timer);
             call_data->timer.data = call_data;
             uv_timer_start(&call_data->timer, timer_callback, 20000, 0);
@@ -151,12 +180,12 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // قراءة الملفات
+    // Read the files
     readTargets(argv[1]);
     readPrefixes(argv[2]);
     readPhoneNumbers(argv[3]);
 
-    // إعداد pjsua
+    // Set up pjsua
     pjsua_config cfg;
     pjsua_logging_config log_cfg;
     pjsua_config_default(&cfg);
@@ -164,19 +193,20 @@ int main(int argc, char *argv[]) {
     cfg.cb.on_call_state = &on_call_state;
     pjsua_create();
     pjsua_init(&cfg, &log_cfg, NULL);
+    pjsua_transport_config tcfg;
+    pjsua_transport_config_default(&tcfg);
+    pjsua_transport_create(PJSIP_TRANSPORT_UDP, &tcfg, NULL);
     pjsua_start();
 
-    // بدء المواضيع
-    pthread_t threads[500];
-    for (int i = 0; i < num_targets && i < 500; i++) {
+    pthread_t threads[num_targets];
+    for(int i = 0; i < num_targets; i++) {
         pthread_create(&threads[i], NULL, thread_func, &targets[i]);
     }
-
-    // انتظار انتهاء المواضيع
-    for (int i = 0; i < num_targets && i < 500; i++) {
+    for(int i = 0; i < num_targets; i++) {
         pthread_join(threads[i], NULL);
     }
 
     pjsua_destroy();
+
     return 0;
 }
