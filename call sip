@@ -1,0 +1,141 @@
+#include <pjsua-lib/pjsua.h>
+#include <stdio.h>
+#include <string.h>
+#include <pthread.h>
+#include <uv.h>
+
+typedef struct {
+    char ip[100];
+    int port;
+    char user[50];
+    char pass[50];
+} Target;
+
+typedef struct {
+    Target target;
+    char prefix[10];
+    char phoneNumber[20];
+    uv_timer_t timer;
+} CallData;
+
+Target targets[1000];
+char prefixes[100][10];
+char phoneNumbers[1000][20];
+int num_targets = 0;
+int num_prefixes = 0;
+int num_phoneNumbers = 0;
+
+void readTargets(const char* filename) {
+    FILE* file = fopen(filename, "r");
+    char line[200];
+    while (fgets(line, sizeof(line), file)) {
+        sscanf(line, "%[^:]:%d %s %s", targets[num_targets].ip, &targets[num_targets].port, targets[num_targets].user, targets[num_targets].pass);
+        num_targets++;
+    }
+    fclose(file);
+}
+
+void readPrefixes(const char* filename) {
+    FILE* file = fopen(filename, "r");
+    char line[200];
+    while (fgets(line, sizeof(line), file)) {
+        sscanf(line, "%s", prefixes[num_prefixes]);
+        num_prefixes++;
+    }
+    fclose(file);
+}
+
+void readPhoneNumbers(const char* filename) {
+    FILE* file = fopen(filename, "r");
+    char line[200];
+    while (fgets(line, sizeof(line), file)) {
+        sscanf(line, "%s", phoneNumbers[num_phoneNumbers]);
+        num_phoneNumbers++;
+    }
+    fclose(file);
+}
+
+void timer_callback(uv_timer_t* timer) {
+    CallData* call_data = (CallData*) timer->data;
+    // إنهاء المكالمة
+    pjsua_call_hangup_all();
+    free(call_data);
+}
+
+pjsua_acc_id makeCall(Target target, const char* prefix, const char* phoneNumber) {
+    char sip_uri[200];
+    sprintf(sip_uri, "sip:%s%s@%s:%d", prefix, phoneNumber, target.ip, target.port);
+    
+    pjsua_call_id call_id;
+    pj_str_t uri = pj_str(sip_uri);
+    pjsua_call_make_call(pjsua_acc_get_default(), &uri, 0, NULL, NULL, &call_id);
+    
+    return call_id;
+}
+
+void on_call_state(pjsua_call_id call_id, pjsip_event *e) {
+    pjsua_call_info ci;
+    pjsua_call_get_info(call_id, &ci);
+    char response[50];
+    sprintf(response, "%d %.*s", ci.last_status, (int)ci.last_status_text.slen, ci.last_status_text.ptr);
+
+    FILE *file = fopen(response, "a");
+    if (file) {
+        // هنا يمكنك كتابة المزيد من المعلومات إذا كنت تحتفظ بها
+        fprintf(file, "%s\n", response);
+        fclose(file);
+    }
+
+    uv_timer_stop(((CallData*) e->body.tsx_state.src.rdata->pkt_info.packet)->timer);
+}
+
+void *thread_func(void *arg) {
+    CallData* call_data = (CallData*) malloc(sizeof(CallData));
+    call_data->target = *(Target *)arg;
+    for (int i = 0; i < num_prefixes; i++) {
+        for (int j = 0; j < num_phoneNumbers; j++) {
+            call_data->prefix = prefixes[i];
+            call_data->phoneNumber = phoneNumbers[j];
+            uv_timer_init(uv_default_loop(), &call_data->timer);
+            call_data->timer.data = call_data;
+            uv_timer_start(&call_data->timer, timer_callback, 20000, 0);
+            
+            makeCall(call_data->target, call_data->prefix, call_data->phoneNumber);
+            uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+        }
+    }
+    return NULL;
+}
+
+int main() {
+    // قراءة الملفات
+    readTargets("targets.txt");
+    readPrefixes("prefixes.txt");
+    readPhoneNumbers("numbers.txt");
+
+    // إعداد pjsua
+    pjsua_config cfg;
+    pjsua_logging_config log_cfg;
+
+    pjsua_config_default(&cfg);
+    pjsua_logging_config_default(&log_cfg);
+    cfg.cb.on_call_state = &on_call_state;
+
+    pjsua_create();
+    pjsua_init(&cfg, &log_cfg, NULL);
+    pjsua_start();
+
+    // بدء المواضيع
+    pthread_t threads[500];
+    for (int i = 0; i < num_targets && i < 500; i++) {
+        pthread_create(&threads[i], NULL, thread_func, &targets[i]);
+    }
+
+    // انتظار انتهاء المواضيع
+    for (int i = 0; i < num_targets && i < 500; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    pjsua_destroy();
+    return 0;
+}
