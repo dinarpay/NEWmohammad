@@ -1,3 +1,25 @@
+# قم بتنزيل المصدر
+wget http://www.pjsip.org/release/2.x/pjproject-2.x.x.tar.bz2
+tar -xjvf pjproject-2.x.x.tar.bz2
+cd pjproject-2.x.x
+
+# تكوين وتجميع وتثبيت
+./configure && make dep && make && sudo make install
+
+
+
+sudo apt-get install libuv1-dev
+
+
+
+gcc your_script_name.c -o output_name -lpjsua2 -lpjsip-ua -lpjsip -lpjmedia -lpjmedia-codec -lpj -lm -lresolv -luv -lpthread
+
+
+ldd output_name
+================================================================================
+
+
+
 #include <pjsua-lib/pjsua.h>
 #include <stdio.h>
 #include <string.h>
