@@ -1,3 +1,6 @@
+gcc -o crack crack.c -lpthread
+./crack
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
