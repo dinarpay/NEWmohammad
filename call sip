@@ -9,6 +9,7 @@ typedef struct {
     int port;
     char user[50];
     char pass[50];
+    char protocol[5];  // udp, tcp, or tls
 } Target;
 
 typedef struct {
@@ -29,7 +30,7 @@ void readTargets(const char* filename) {
     FILE* file = fopen(filename, "r");
     char line[200];
     while (fgets(line, sizeof(line), file)) {
-        sscanf(line, "%[^:]:%d %s %s", targets[num_targets].ip, &targets[num_targets].port, targets[num_targets].user, targets[num_targets].pass);
+        sscanf(line, "%[^:]:%d %s %s %s", targets[num_targets].ip, &targets[num_targets].port, targets[num_targets].user, targets[num_targets].pass, targets[num_targets].protocol);
         num_targets++;
     }
     fclose(file);
@@ -57,15 +58,18 @@ void readPhoneNumbers(const char* filename) {
 
 void timer_callback(uv_timer_t* timer) {
     CallData* call_data = (CallData*) timer->data;
-    // إنهاء المكالمة
     pjsua_call_hangup_all();
     free(call_data);
 }
 
 pjsua_acc_id makeCall(Target target, const char* prefix, const char* phoneNumber) {
     char sip_uri[200];
-    sprintf(sip_uri, "sip:%s%s@%s:%d", prefix, phoneNumber, target.ip, target.port);
-    
+    if(strlen(target.user) > 0 && strlen(target.pass) > 0) {
+        sprintf(sip_uri, "sip:%s:%s@%s:%d;transport=%s/%s%s", target.user, target.pass, target.ip, target.port, target.protocol, prefix, phoneNumber);
+    } else {
+        sprintf(sip_uri, "sip:%s:%d;transport=%s/%s%s", target.ip, target.port, target.protocol, prefix, phoneNumber);
+    }
+
     pjsua_call_id call_id;
     pj_str_t uri = pj_str(sip_uri);
     pjsua_call_make_call(pjsua_acc_get_default(), &uri, 0, NULL, NULL, &call_id);
@@ -78,15 +82,13 @@ void on_call_state(pjsua_call_id call_id, pjsip_event *e) {
     pjsua_call_get_info(call_id, &ci);
     char response[50];
     sprintf(response, "%d %.*s", ci.last_status, (int)ci.last_status_text.slen, ci.last_status_text.ptr);
-
     FILE *file = fopen(response, "a");
     if (file) {
         // هنا يمكنك كتابة المزيد من المعلومات إذا كنت تحتفظ بها
         fprintf(file, "%s\n", response);
         fclose(file);
     }
-
-    uv_timer_stop(((CallData*) e->body.tsx_state.src.rdata->pkt_info.packet)->timer);
+    uv_timer_stop(&((CallData*) e->body.tsx_state.src.rdata->pkt_info.packet)->timer);
 }
 
 void *thread_func(void *arg) {
@@ -107,20 +109,23 @@ void *thread_func(void *arg) {
     return NULL;
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    if(argc < 4) {
+        printf("Usage: %s <targets_file> <prefixes_file> <phone_numbers_file>\n", argv[0]);
+        return -1;
+    }
+
     // قراءة الملفات
-    readTargets("targets.txt");
-    readPrefixes("prefixes.txt");
-    readPhoneNumbers("numbers.txt");
+    readTargets(argv[1]);
+    readPrefixes(argv[2]);
+    readPhoneNumbers(argv[3]);
 
     // إعداد pjsua
     pjsua_config cfg;
     pjsua_logging_config log_cfg;
-
     pjsua_config_default(&cfg);
     pjsua_logging_config_default(&log_cfg);
     cfg.cb.on_call_state = &on_call_state;
-
     pjsua_create();
     pjsua_init(&cfg, &log_cfg, NULL);
     pjsua_start();
