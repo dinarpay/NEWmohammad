@@ -17,7 +17,21 @@ gcc your_script_name.c -o output_name -lpjsua2 -lpjsip-ua -lpjsip -lpjmedia -lpj
 
 ldd output_name
 ================================================================================
+// بعد تكوين PJSIP ولكن قبل بدء PJSIP
+pjsua_transport_config tcfg;
+pjsua_transport_id tid = -1;
 
+pjsua_transport_config_default(&tcfg);
+tcfg.tls_setting.method = PJSIP_TLSV1_2_METHOD; // اختيار نسخة TLS
+tcfg.tls_setting.verify_server = PJ_FALSE; // قم بتعيينه إلى PJ_TRUE إذا كنت ترغب في التحقق من شهادة الخادم
+tcfg.tls_setting.verify_client = PJ_FALSE; // قم بتعيينه إلى PJ_TRUE إذا كنت ترغب في التحقق من شهادات العملاء (إذا كان الخادم)
+tcfg.tls_setting.verify_depth = 2;
+tcfg.tls_setting.ciphers = 0; // تعيين مجموعة الشفرة التي ترغب في استخدامها
+tcfg.tls_setting.cert_file = pj_str("path_to_your_certificate.pem"); // مسار إلى شهادتك
+tcfg.tls_setting.privkey_file = pj_str("path_to_your_private_key.pem"); // مسار إلى المفتاح الخاص بك
+
+pjsua_transport_create(PJSIP_TRANSPORT_TLS, &tcfg, &tid);
+============================================================================
 
 
 #include <pjsua-lib/pjsua.h>
