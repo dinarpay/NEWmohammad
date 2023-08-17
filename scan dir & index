@@ -2,6 +2,7 @@ gcc -o Index Index.c -lcurl -lpthread
 
 ./Index
 
+===============
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,12 +10,11 @@ gcc -o Index Index.c -lcurl -lpthread
 #include <pthread.h>
 #include <curl/curl.h>
 
-#define MAX_LINES 10000
 #define LINE_LENGTH 256
 #define URL_LENGTH (2 * LINE_LENGTH + 10)
-#define TIMEOUT 3L
-#define MAX_THREADS 2500
-#define PATHS_PER_BATCH 10
+#define TIMEOUT 2L
+#define MAX_THREADS 100
+#define PATHS_PER_BATCH 16
 
 typedef struct {
     char target[LINE_LENGTH];
@@ -43,12 +43,13 @@ void *crawl_target(void *args) {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, result);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, TIMEOUT);
 
-        curl_easy_perform(curl);
+        CURLcode res = curl_easy_perform(curl);
         curl_easy_cleanup(curl);
 
-        if (strstr(result, "found") != NULL) {
+        if (res == CURLE_OK && strstr(result, "found") != NULL) {
             printf("Target URL: %s\n", url);
             FILE *results_file = fopen("results.txt", "a");
             fprintf(results_file, "%s\n", url);
@@ -62,8 +63,8 @@ void *crawl_target(void *args) {
 }
 
 int main() {
-    char targets[MAX_LINES][LINE_LENGTH];
-    char paths[MAX_LINES][LINE_LENGTH];
+    char target[LINE_LENGTH];
+    char path[LINE_LENGTH];
     int total_targets = 0, total_paths = 0;
 
     FILE *targets_file = fopen("targets.txt", "r");
@@ -79,47 +80,40 @@ int main() {
         return 1;
     }
 
-    while (total_targets < MAX_LINES && fgets(targets[total_targets], sizeof(targets[0]), targets_file)) {
-        strtok(targets[total_targets], "\n");
+    while (fgets(target, sizeof(target), targets_file)) {
+        strtok(target, "\n");
         total_targets++;
-    }
 
-    while (total_paths < MAX_LINES && fgets(paths[total_paths], sizeof(paths[0]), paths_file)) {
-        strtok(paths[total_paths], "\n");
-        total_paths++;
+        rewind(paths_file);
+        total_paths = 0;
+        while (fgets(path, sizeof(path), paths_file)) {
+            strtok(path, "\n");
+            total_paths++;
+
+            pthread_t threads[MAX_THREADS];
+            int thread_count = 0;
+
+            CrawlArgs *args = malloc(sizeof(CrawlArgs));
+            strcpy(args->target, target);
+            strcpy(args->path, path);
+            args->progress = total_targets * total_paths;
+            args->total = total_targets * total_paths;
+
+            pthread_create(&threads[thread_count], NULL, crawl_target, args);
+            thread_count++;
+
+            if (thread_count == MAX_THREADS) {
+                for (int i = 0; i < MAX_THREADS; i++) {
+                    pthread_join(threads[i], NULL);
+                }
+                thread_count = 0;
+            }
+        }
     }
 
     fclose(targets_file);
     fclose(paths_file);
 
-    pthread_t threads[MAX_THREADS];
-    int thread_count = 0;
-
-    for (int t = 0; t < total_targets; t++) {
-        for (int p = 0; p < total_paths; p += PATHS_PER_BATCH) {
-            for (int batch = 0; batch < PATHS_PER_BATCH && p + batch < total_paths; batch++) {
-                if (thread_count == MAX_THREADS) {
-                    for (int i = 0; i < MAX_THREADS; i++) {
-                        pthread_join(threads[i], NULL);
-                    }
-                    thread_count = 0;
-                }
-
-                CrawlArgs *args = malloc(sizeof(CrawlArgs));
-                strcpy(args->target, targets[t]);
-                strcpy(args->path, paths[p + batch]);
-                args->progress = t * total_paths + p + batch + 1;
-                args->total = total_targets * total_paths;
-
-                pthread_create(&threads[thread_count], NULL, crawl_target, args);
-                thread_count++;
-            }
-        }
-    }
-
-    for (int i = 0; i < thread_count; i++) {
-        pthread_join(threads[i], NULL);
-    }
-
+    printf("Finished\n");
     return 0;
 }
