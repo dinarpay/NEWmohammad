@@ -124,9 +124,17 @@ void *try_login(void *arg) {
     return NULL;
 }
 
+void print_program_info() {
+    printf("\033[1;32mSIP Cracking Tool by : Mohamamd Elnwajha\033[0m\n");
+    printf("--------------------------------------\n");
+    printf("\033[1;31mUsage: ./crack <protocol> <threads> <targets_file>\033[0m\n");
+    printf("Example: ./crack tls 500 targets.txt\n");
+    printf("\n");
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 4) {
-        printf("Usage: %s <protocol> <threads> <targets_file>\n", argv[0]);
+        print_program_info();
         return 1;
     }
 
