@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 
 #define MAX_LINE 512
 #define COMMAND_SIZE 2048
@@ -47,12 +49,24 @@ void free_blocklist() {
     free(blocklist_data);
 }
 
+void timer_handler(int signum) {
+    pthread_exit(NULL);
+}
+
 void *try_login(void *arg) {
     ThreadData *data = (ThreadData *)arg;
+    
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = &timer_handler;
+    sigaction(SIGALRM, &sa, NULL);
+    alarm(1);  // Set the timer for one second
+
     if (is_target_in_blocklist(data->target)) {
         free(data);
         return NULL;
     }
+
     char command[COMMAND_SIZE];
     FILE *credentials = fopen("credentials.txt", "r");
     char credential_line[MAX_LINE];
@@ -83,7 +97,7 @@ void *try_login(void *arg) {
         FILE *cmd_output = popen(command, "r");
         while (fgets(output, sizeof(output), cmd_output)) {
             if (strstr(output, "200 OK") || strstr(output, "202 Accepted")) {
-                if (strcmp(username, "1051115544444444444") == 0 && strcmp(password, "8s7d7ds4d44d44dd44") == 0) {
+                if (strcmp(username, "anyuser") == 0 && strcmp(password, "anypassword") == 0) {
                     is_default_accepted = 1;
                     FILE *blocklist = fopen("blocklist.txt", "a");
                     if (blocklist) {
