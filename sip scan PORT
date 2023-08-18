@@ -1,4 +1,5 @@
 sudo apt-get install sipsak
+sudo apt-get install libevent-dev
 
 gcc -o scanner scanner.c -lpthread
 ./scanner <protocol> <targets_file> <port_range>
