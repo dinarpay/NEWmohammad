@@ -1,7 +1,7 @@
 sudo apt-get install sipsak
 sudo apt-get install libevent-dev
 
-gcc -o scanner scanner.c -lpthread
+gcc -o scanner scanner.c -levent
 ./scanner <protocol> <targets_file> <port_range>
 ./scanner tls targets.txt 5060-5090
 
