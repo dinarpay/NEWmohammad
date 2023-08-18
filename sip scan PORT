@@ -1,3 +1,8 @@
+sudo apt-get install sipsak
+
+gcc -o scanner scanner.c -lpthread
+./scanner <protocol> <targets_file> <port_range>
+./scanner tls targets.txt 5060-5090
 
 
 
