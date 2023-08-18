@@ -1,0 +1,175 @@
+
+
+
+
+==============================================
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
+#include <arpa/inet.h>
+
+#define MAX_LINE 512
+#define COMMAND_SIZE 2048
+#define MAX_IP_RANGE 65536  // Adjust based on the expected maximum number of IPs in a subnet
+
+typedef struct {
+    char target[MAX_LINE];
+    char protocol[5];
+    char port[6];
+} ThreadData;
+
+void timer_handler(int signum) {
+    pthread_exit(NULL);
+}
+
+void print_program_info() {
+    printf("\033[1;32mSIP Port Scanner Tool by : Mohamamd Elnwajha\033[0m\n");
+    printf("--------------------------------------\n");
+    printf("\033[1;31mUsage: ./scanner <protocol> <targets_file> <port_range>\033[0m\n");
+    printf("Example: ./scanner tls targets.txt 5060-5090\n");
+    printf("\n");
+}
+
+void get_ip_range(const char *subnet, char ip_range[MAX_IP_RANGE][INET_ADDRSTRLEN]) {
+    // Extract IP and CIDR
+    char ip[INET_ADDRSTRLEN];
+    int prefix;
+    sscanf(subnet, "%[^/]/%d", ip, &prefix);
+
+    unsigned long start = ntohl(inet_addr(ip));
+    unsigned long end = start + (1UL << (32 - prefix)) - 1;
+
+    for (unsigned long current = start; current <= end; current++) {
+        struct in_addr addr;
+        addr.s_addr = htonl(current);
+        strcpy(ip_range[current - start], inet_ntoa(addr));
+    }
+}
+
+void *scan_target(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = &timer_handler;
+    sigaction(SIGALRM, &sa, NULL);
+    alarm(10);  // Set the timer for ten seconds to avoid hanging scans
+
+    char command[COMMAND_SIZE];
+    char output[COMMAND_SIZE];
+
+    if (strcmp(data->protocol, "tls") == 0) {
+        snprintf(command, sizeof(command), "sipsak -s sip:%s:%s -E %s --tls-ignore-cert-failure",
+                 data->target, data->port, data->protocol);
+    } else {
+        snprintf(command, sizeof(command), "sipsak -s sip:%s:%s -E %s",
+                 data->target, data->port, data->protocol);
+    }
+
+    FILE *cmd_output = popen(command, "r");
+    char response[COMMAND_SIZE] = "";
+    char server[COMMAND_SIZE] = "";
+    char protocol_type[COMMAND_SIZE] = "";
+
+    while (fgets(output, sizeof(output), cmd_output)) {
+        if (strstr(output, "SIP/")) {
+            strncpy(response, output, sizeof(response));
+        }
+        if (strstr(output, "Server:")) {
+            strncpy(server, output, sizeof(server));
+        }
+        if (strstr(output, "SIP/2.0/")) {
+            strncpy(protocol_type, output, sizeof(protocol_type));
+        }
+    }
+
+    strtok(response, "\n");
+    strtok(server, "\n");
+    strtok(protocol_type, "\n");
+
+    FILE *results_file = fopen("scan_results.txt", "a");
+    if (results_file) {
+        fprintf(results_file, "%s:%s   %s   %s   %s\n", data->target, data->port, protocol_type, response, server);
+        fclose(results_file);
+    }
+
+    pclose(cmd_output);
+    free(data);
+    return NULL;
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 4) {
+        print_program_info();
+        return 1;
+    }
+
+    char *protocol = argv[1];
+    char *targets_file = argv[2];
+    char *port_range = argv[3];
+
+    FILE *targets = fopen(targets_file, "r");
+    if (!targets) {
+        perror("Failed to open targets file");
+        return 1;
+    }
+
+    int max_threads = 100;  // Example thread count, adjust as needed
+    pthread_t threads[max_threads];
+    int current_thread = 0;
+    char target_line[MAX_LINE];
+
+    char *delimiter = strchr(port_range, '-');
+    int start_port, end_port;
+    if (delimiter) {
+        *delimiter = '\0';
+        start_port = atoi(port_range);
+        end_port = atoi(delimiter + 1);
+    } else {
+        start_port = atoi(port_range);
+        end_port = start_port;
+    }
+
+    char ip_range[MAX_IP_RANGE][INET_ADDRSTRLEN];
+    while (fgets(target_line, sizeof(target_line), targets)) {
+        strtok(target_line, "\n");
+
+        if (strchr(target_line, '/')) {
+            get_ip_range(target_line, ip_range);
+        } else {
+            strncpy(ip_range[0], target_line, INET_ADDRSTRLEN);
+            ip_range[1][0] = '\0';
+        }
+
+        for (int ip_idx = 0; ip_idx < MAX_IP_RANGE && ip_range[ip_idx][0] != '\0'; ip_idx++) {
+            for (int port = start_port; port <= end_port; port++) {
+                ThreadData *data = malloc(sizeof(ThreadData));
+                strncpy(data->target, ip_range[ip_idx], sizeof(data->target) - 1);
+                strncpy(data->protocol, protocol, sizeof(data->protocol) - 1);
+                snprintf(data->port, sizeof(data->port), "%d", port);
+
+                pthread_create(&threads[current_thread], NULL, scan_target, data);
+                current_thread++;
+
+                if (current_thread >= max_threads) {
+                    for (int i = 0; i < max_threads; i++) {
+                        pthread_join(threads[i], NULL);
+                    }
+                    current_thread = 0;
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < current_thread; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    fclose(targets);
+
+    printf("Scanning process has completed.\n");
+    return 0;
+}
