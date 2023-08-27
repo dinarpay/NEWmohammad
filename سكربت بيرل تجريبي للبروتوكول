@@ -34,3 +34,30 @@ sub start_connection{
     $ua->register or die $ua->error;
     print "ok\n";
 }
+=======================================
+
+يعمل مع udp
+
+use strict;
+use warnings;
+use Net::SIP;
+
+start_connection("pbxbpac.pdocs.net","5060","311", "bpac311sip");
+
+sub start_connection{
+    my ($host, $port, $user, $pass) = @_;
+
+    my $ua = Net::SIP::Simple->new(
+        registrar => "sip:$host:$port",
+        domain => $host,
+        from => $user,
+        auth => [ $user, $pass ],
+    ) or die "failed to create UA";
+    $ua->register or die $ua->error;
+    print "ok\n";
+}
+
+======================================
+
+يعمل مع tcp
+
