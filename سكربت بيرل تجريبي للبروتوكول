@@ -1,0 +1,36 @@
+جلب الشهادة للهدف
+
+echo | openssl s_client -connect avaya.sultan.com.kw:5061 | openssl x509 -fingerprint -noout
+
+echo | openssl s_client -connect avaya.sultan.com.kw:5061 | openssl x509 -noout -dates
+
+echo | openssl s_client -connect avaya.sultan.com.kw:5061 -showcerts
+
+
+اذا كان اليوزر والباسورد صحيح 
+يعطي الرد ok
+ادا كان غير صحيح 
+يعطي رد اخر مثلا 401   403
+
+
+use strict;
+use warnings;
+use Net::SIP;
+
+start_connection("avaya.sultan.com.test","5061","9999999999900", "1234");
+
+sub start_connection{
+    my ($host,$port,$user,$pass) = @_;
+
+    my $ua = Net::SIP::Simple->new(
+        registrar => "sips:$host:$port",
+        domain => $host,
+        from => $user,
+        auth => [ $user,$pass ],
+        tls => {
+            SSL_fingerprint => '6B:0E:93:21:93:8D:25:B8:A1:B5:A8:80:58:C8:16:E3:D8:F9:0C:D7',
+        },
+    ) or die "failed to create UA";
+    $ua->register or die $ua->error;
+    print "ok\n";
+}
