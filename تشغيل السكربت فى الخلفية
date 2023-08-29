@@ -1,0 +1,17 @@
+
+sudo apt-get install screen
+
+screen -S crack
+perl Crack 500 2 IPS
+screen -r crack
+----------------
+
+cpan IO::Socket::SSL
+cpan Net::SIP
+cpan Parallel::ForkManager
+cpan Net::SSLeay
+sudo apt-get install libio-socket-ssl-perl
+sudo apt-get install libnet-dns-perl
+
+sudo apt-get update
+sudo apt-get upgrade openssl
