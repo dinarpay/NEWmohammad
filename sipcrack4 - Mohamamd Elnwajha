@@ -62,7 +62,7 @@ void *try_login(void *arg) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = &timer_handler;
     sigaction(SIGALRM, &sa, NULL);
-    alarm(1);  // Set the timer for two seconds
+    alarm(5);  // Set the timer for two seconds
 
     if (is_target_in_blocklist(data->target)) {
         free(data);
