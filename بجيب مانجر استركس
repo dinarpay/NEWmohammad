@@ -1,108 +1,148 @@
+gcc -o m m.c -lpthread
+./m
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <pthread.h>
-#include <curl/curl.h>
 
-#define MAX_LINES 10000
-#define LINE_LENGTH 256
-#define URL_LENGTH (2 * LINE_LENGTH + 10)
-#define TIMEOUT 5L
-#define MAX_THREADS 250
+#define MAX_IP_LEN 16
+#define MAX_PORT_LEN 6
+
+char input_file[] = "targets.txt";
+char output_file[] = "results.txt";
+int timeout_duration = 3;
+int num_threads = 250; // Define the number of threads
+
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct {
-    char target[LINE_LENGTH];
-    int progress;
-    int total;
-} CrawlArgs;
+    int thread_id;
+    int num_targets;
+} ThreadInfo;
 
-size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
-    if (strstr((char *)contents, "Asterisk Call Manager") != NULL) {
-        strcat(userp, "found");
+void *checkBanners(void *arg) {
+    ThreadInfo *info = (ThreadInfo *)arg;
+    int thread_id = info->thread_id;
+    int num_targets = info->num_targets;
+
+    char target[MAX_IP_LEN + MAX_PORT_LEN + 2];
+    FILE *input, *output;
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+
+    input = fopen(input_file, "r");
+    if (input == NULL) {
+        perror("fopen");
+        pthread_exit(NULL);
     }
-    return size * nmemb;
-}
 
-void *crawl_target(void *args) {
-    CrawlArgs *crawl_args = (CrawlArgs *)args;
+    int targets_per_thread = num_targets / num_threads;
+    int start_index = thread_id * targets_per_thread;
+    int end_index = start_index + targets_per_thread;
 
-    char url[URL_LENGTH];
-    snprintf(url, sizeof(url), "%s/", crawl_args->target);
+    // Adjust the last thread to handle any remaining targets
+    if (thread_id == num_threads - 1) {
+        end_index = num_targets;
+    }
 
-    char result[10] = "";
-    CURL *curl = curl_easy_init();
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, result);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, TIMEOUT);
+    for (int i = 0; i < start_index; i++) {
+        if (getline(&line, &len, input) == -1) {
+            break; // Skip lines that have already been processed by other threads
+        }
+    }
 
-        curl_easy_perform(curl);
-        curl_easy_cleanup(curl);
+    while (start_index < end_index && (read = getline(&line, &len, input)) != -1) {
+        start_index++;
+        line[strcspn(line, "\n")] = '\0';  // Remove newline character if present
+        strncpy(target, line, sizeof(target));
 
-        if (strstr(result, "found") != NULL) {
-            printf("Target URL: %s\n", url);
-            FILE *results_file = fopen("indexOF.txt", "a");
-            if (results_file) {
-                fprintf(results_file, "%s\n", url);
-                fclose(results_file);
+        char *ip = strtok(target, ":");
+        char *port = strtok(NULL, ":");
+
+        if (ip != NULL && port != NULL) {
+            char command[256];
+            snprintf(command, sizeof(command), "nc -nn -w%d %s %s 2>&1", timeout_duration, ip, port);
+
+            printf("Thread %d: Checking Telnet banner for: %s:%s\n", thread_id, ip, port); // Display target information
+
+            FILE *fp = popen(command, "r");
+            if (fp != NULL) {
+                char buffer[4096];
+                while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+                    if (strstr(buffer, "Asterisk Call Manager") != NULL) {
+                        pthread_mutex_lock(&lock);
+                        output = fopen(output_file, "a");
+                        if (output != NULL) {
+                            fprintf(output, "%s:%s\n", ip, port);
+                            fclose(output);
+                            printf("Thread %d: Found: %s:%s\n", thread_id, ip, port); // Display the target if the banner is found
+                        } else {
+                            perror("fopen");
+                        }
+                        pthread_mutex_unlock(&lock);
+                        break;
+                    }
+                }
+                pclose(fp);
             } else {
-                printf("Error opening indexOF.txt for writing.\n");
+                perror("popen");
             }
         }
     }
 
-    printf("Progress: %d/%d\n", crawl_args->progress, crawl_args->total);
-    free(args);
-    return NULL;
+    fclose(input);
+    if (line) free(line);
+
+    pthread_exit(NULL);
 }
 
 int main() {
-    char targets[MAX_LINES][LINE_LENGTH];
-    int total_targets = 0;
+    pthread_t threads[num_threads];
+    int num_targets = 0;
 
-    FILE *targets_file = fopen("targets.txt", "r");
-
-    if (targets_file == NULL) {
-        fprintf(stderr, "Error opening targets.txt\n");
+    FILE *input = fopen(input_file, "r");
+    if (input == NULL) {
+        perror("fopen");
         return 1;
     }
 
-    while (total_targets < MAX_LINES && fgets(targets[total_targets], sizeof(targets[0]), targets_file)) {
-        strtok(targets[total_targets], "\n");
-        total_targets++;
+    // Count the number of targets
+    char *line = NULL;
+    size_t len = 0;
+    while (getline(&line, &len, input) != -1) {
+        num_targets++;
+    }
+    fclose(input);
+
+    // Reset file position
+    input = fopen(input_file, "r");
+    if (input == NULL) {
+        perror("fopen");
+        return 1;
     }
 
-    fclose(targets_file);
+    // Create threads to check banners
+    for (int i = 0; i < num_threads; i++) {
+        ThreadInfo *info = malloc(sizeof(ThreadInfo));
+        info->thread_id = i;
+        info->num_targets = num_targets;
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-
-    int processed_targets = 0;
-    int current_target_index = 0;
-    pthread_t threads[MAX_THREADS];
-
-    while (processed_targets < total_targets) {
-        int thread_count = 0;
-
-        for (int t = current_target_index; t < total_targets && thread_count < MAX_THREADS; t++) {
-            CrawlArgs *args = malloc(sizeof(CrawlArgs));
-            strcpy(args->target, targets[t]);
-            args->progress = processed_targets + 1;
-            args->total = total_targets;
-
-            pthread_create(&threads[thread_count], NULL, crawl_target, args);
-            thread_count++;
-            current_target_index++;
-            processed_targets++;
-        }
-
-        for (int i = 0; i < thread_count; i++) {
-            pthread_join(threads[i], NULL);
+        if (pthread_create(&threads[i], NULL, checkBanners, (void *)info) != 0) {
+            perror("pthread_create");
+            return 1;
         }
     }
 
-    curl_global_cleanup();
+    // Wait for threads to finish
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    if (line) free(line);
 
     return 0;
 }
